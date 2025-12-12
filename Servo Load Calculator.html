@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>RC Servo Torque Calculator</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      max-width: 950px;
+      margin: 20px auto;
+      line-height: 1.4;
+    }
+    h1 {
+      font-size: 1.5rem;
+      margin-bottom: 0.3rem;
+    }
+    h2 {
+      margin-top: 1.2rem;
+      font-size: 1.1rem;
+    }
+    .row {
+      display: flex;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .row label {
+      flex: 0 0 340px;
+    }
+    .row input,
+    .row select {
+      flex: 1;
+      padding: 3px 6px;
+    }
+    .note {
+      font-size: 0.8rem;
+      color: #555;
+    }
+    .results {
+      margin-top: 15px;
+      padding: 10px;
+      border: 1px solid #ccc;
+      border-radius: 6px;
+      background: #f9f9f9;
+    }
+    .results span {
+      display: block;
+      margin-bottom: 4px;
+    }
+    button {
+      padding: 6px 12px;
+      margin-top: 8px;
+    }
+    code {
+      font-size: 0.85rem;
+    }
+    .surface-tabs {
+      margin-bottom: 8px;
+    }
+    .surface-tabs button {
+      padding: 4px 8px;
+      margin-right: 4px;
+      border: 1px solid #888;
+      background: #eee;
+      cursor: pointer;
+    }
+    .surface-tabs button.active {
+      background: #cde;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+
+<h1>RC Servo Torque Calculator</h1>
+<p class="note">
+  Estimates required servo torque from aerodynamic load on a control surface and linkage geometry.
+  Internal calculations use SI units; final torque is shown in both metric and imperial units.
+</p>
+
+<!-- 1. Speed -->
+<h2>1. Aircraft Speed</h2>
+
+<div class="row">
+  <label for="speedMode">Speed input mode:</label>
+  <select id="speedMode" onchange="toggleSpeedMode()">
+    <option value="direct">Enter airspeed directly</option>
+    <option value="prop">Calculate from prop pitch</option>
+  </select>
+</div>
+
+<div id="directSpeedBlock">
+  <div class="row">
+    <label for="airspeed">Airspeed:</label>
+    <input id="airspeed" type="number" value="30" step="0.1" />
+    <select id="speedUnit">
+      <option value="mps">m/s</option>
+      <option value="kmh">km/h</option>
+      <option value="mph">mph</option>
+    </select>
+  </div>
+</div>
+
+<div id="propSpeedBlock" style="display:none;">
+  <div class="row">
+    <label for="propPitch">Prop pitch (inches):</label>
+    <input id="propPitch" type="number" value="6" step="0.1" />
+  </div>
+
+  <div class="row">
+    <label for="rpm">Prop RPM:</label>
+    <input id="rpm" type="number" value="12000" step="50" />
+  </div>
+
+  <div class="row">
+    <label for="eta">
+      Prop efficiency (0–1)
+      <span style="font-size:0.8rem;">(default 0.85)</span>:
+    </label>
+    <input id="eta" type="number" value="0.85" step="0.01" />
+  </div>
+
+  <p class="note">
+    Approx pitch speed:<br>
+    <code>V (m/s) = pitch(in) × RPM × 0.0004233 × efficiency</code><br>
+    Typical efficiency range ≈ 0.75–0.90.
+  </p>
+</div>
+
+<!-- 2. Air properties -->
+<h2>2. Air Properties</h2>
+
+<div class="row">
+  <label for="rho">Air density ρ (kg/m³):</label>
+  <input id="rho" type="number" value="1.225" step="0.001" />
+</div>
+
+<!-- 3. Control surface geometry -->
+<h2>3. Control Surface Geometry</h2>
+
+<div class="surface-tabs">
+  <button type="button" id="tab-aileron" onclick="applySurfacePreset('aileron')">Aileron</button>
+  <button type="button" id="tab-elevator" onclick="applySurfacePreset('elevator')">Elevator</button>
+  <button type="button" id="tab-rudder" onclick="applySurfacePreset('rudder')">Rudder</button>
+</div>
+
+<div class="row">
+  <label for="lengthUnit">Length units (spans, chords, arms):</label>
+  <select id="lengthUnit">
+    <option value="m">meters</option>
+    <option value="cm">centimeters</option>
+    <option value="mm">millimeters</option>
+    <option value="in">inches</option>
+  </select>
+</div>
+
+<div class="row">
+  <label for="areaUnit">Area units (for direct area):</label>
+  <select id="areaUnit">
+    <option value="m2">m²</option>
+    <option value="cm2">cm²</option>
+    <option value="mm2">mm²</option>
+    <option value="in2">in²</option>
+  </select>
+</div>
+
+<div class="row">
+  <label for="geomMode">Geometry input mode:</label>
+  <select id="geomMode" onchange="toggleGeomMode()">
+    <option value="direct">Direct area + chord</option>
+    <option value="rect">Rectangular surface (span &amp; chord)</option>
+    <option value="taper">Tapered surface (span, root &amp; tip)</option>
+  </select>
+</div>
+
+<!-- Direct area + chord -->
+<div id="geomDirectBlock">
+  <div class="row">
+    <label for="area">Control surface area S (chosen area units):</label>
+    <input id="area" type="number" value="0.02" step="0.001" />
+  </div>
+  <div class="row">
+    <label for="chord">Control surface chord c (chosen length units):</label>
+    <input id="chord" type="number" value="0.05" step="0.001" />
+  </div>
+</div>
+
+<!-- Rectangular surface -->
+<div id="geomRectBlock" style="display:none;">
+  <div class="row">
+    <label for="spanRect">Surface span/length (chosen length units):</label>
+    <input id="spanRect" type="number" value="0.4" step="0.01" />
+  </div>
+  <div class="row">
+    <label for="chordRect">Chord (chosen length units):</label>
+    <input id="chordRect" type="number" value="0.05" step="0.001" />
+  </div>
+  <p class="note">
+    Area S = span × chord. Chord c = chord (constant).
+  </p>
+</div>
+
+<!-- Tapered surface -->
+<div id="geomTaperBlock" style="display:none;">
+  <div class="row">
+    <label for="spanTaper">Surface span/length (chosen length units):</label>
+    <input id="spanTaper" type="number" value="0.4" step="0.01" />
+  </div>
+  <div class="row">
+    <label for="chordRoot">Root chord (chosen length units):</label>
+    <input id="chordRoot" type="number" value="0.06" step="0.001" />
+  </div>
+  <div class="row">
+    <label for="chordTip">Tip chord (chosen length units):</label>
+    <input id="chordTip" type="number" value="0.04" step="0.001" />
+  </div>
+  <p class="note">
+    Area S = ½ × (root + tip) × span (trapezoid).<br>
+    Chord c uses the mean aerodynamic chord of the trapezoid.
+  </p>
+</div>
+
+<div class="row">
+  <label for="cpFrac">
+    Center-of-pressure fraction x<sub>cp</sub> (0–1, from hinge):
+  </label>
+  <input id="cpFrac" type="number" value="0.4" step="0.05" />
+</div>
+
+<!-- 4. Linkage geometry -->
+<h2>4. Linkage Geometry</h2>
+
+<div class="row">
+  <label for="servoArm">Servo arm length (chosen length units):</label>
+  <input id="servoArm" type="number" value="0.012" step="0.001" />
+</div>
+
+<div class="row">
+  <label for="hornArm">Control horn length (chosen length units):</label>
+  <input id="hornArm" type="number" value="0.018" step="0.001" />
+</div>
+
+<!-- 5. Safety factor & servo type -->
+<h2>5. Safety Factor & Servo Type</h2>
+
+<div class="row">
+  <label for="safety">Safety factor (e.g. 2–4):</label>
+  <input id="safety" type="number" value="3" step="0.1" />
+</div>
+
+<div class="row">
+  <label for="servoType">Servo type:</label>
+  <select id="servoType">
+    <option value="digital">Digital (full rated torque)</option>
+    <option value="analog">Analog (add ~25% margin)</option>
+  </select>
+</div>
+
+<button onclick="calculateServoTorque()">Calculate Required Servo Torque</button>
+
+<div class="results" id="results">
+  <strong>Results will appear here.</strong>
+</div>
+
+<!-- 6. Config JSON -->
+<h2>6. Config JSON (optional save/load)</h2>
+<p class="note">
+  This JSON describes the current surface setup (including which surface tab you selected).
+  To handle multiple surfaces, export one JSON per surface (aileron, elevator, rudder)
+  and store them together (e.g. in an array or separate files).
+</p>
+<textarea id="configJson" rows="8" style="width:100%;"></textarea>
+<div>
+  <button type="button" onclick="exportConfig()">Export config to JSON</button>
+  <button type="button" onclick="importConfig()">Import config from JSON</button>
+</div>
+
+<script>
+  let currentSurfaceName = 'aileron';
+
+  function toggleSpeedMode() {
+    const mode = document.getElementById('speedMode').value;
+    document.getElementById('directSpeedBlock').style.display =
+      mode === 'direct' ? 'block' : 'none';
+    document.getElementById('propSpeedBlock').style.display =
+      mode === 'prop' ? 'block' : 'none';
+  }
+
+  function toggleGeomMode() {
+    const mode = document.getElementById('geomMode').value;
+    document.getElementById('geomDirectBlock').style.display =
+      mode === 'direct' ? 'block' : 'none';
+    document.getElementById('geomRectBlock').style.display =
+      mode === 'rect' ? 'block' : 'none';
+    document.getElementById('geomTaperBlock').style.display =
+      mode === 'taper' ? 'block' : 'none';
+  }
+
+  function lengthToMetersFactor() {
+    const u = document.getElementById('lengthUnit').value;
+    if (u === 'm')  return 1.0;
+    if (u === 'cm') return 0.01;
+    if (u === 'mm') return 0.001;
+    if (u === 'in') return 0.0254;
+    return 1.0;
+  }
+
+  function areaToSquareMetersFactor() {
+    const u = document.getElementById('areaUnit').value;
+    if (u === 'm2')  return 1.0;
+    if (u === 'cm2') return 1.0e-4;
+    if (u === 'mm2') return 1.0e-6;
+    if (u === 'in2') return 0.00064516;
+    return 1.0;
+  }
+
+  function calculateAirspeed() {
+    const mode = document.getElementById('speedMode').value;
+
+    if (mode === 'direct') {
+      const Vuser = parseFloat(document.getElementById('airspeed').value);
+      const unit = document.getElementById('speedUnit').value;
+      if (!isFinite(Vuser) || Vuser <= 0) return NaN;
+      if (unit === 'mps') return Vuser;
+      if (unit === 'kmh') return Vuser / 3.6;
+      if (unit === 'mph') return Vuser * 0.44704;
+      return Vuser;
+    } else {
+      const pitch = parseFloat(document.getElementById('propPitch').value);
+      const rpm   = parseFloat(document.getElementById('rpm').value);
+      const eta   = parseFloat(document.getElementById('eta').value);
+
+      if (!isFinite(pitch) || !isFinite(rpm) || !isFinite(eta) ||
+          pitch <= 0 || rpm <= 0 || eta <= 0 || eta > 1.5) {
+        return NaN;
+      }
+      // Pitch speed in m/s
+      return pitch * rpm * 0.0004233 * eta;
+    }
+  }
+
+  function computeGeometry() {
+    const mode = document.getElementById('geomMode').value;
+    const lf = lengthToMetersFactor();
+    const af = areaToSquareMetersFactor();
+    let S = NaN;
+    let c = NaN;
+    let desc = '';
+
+    if (mode === 'direct') {
+      const areaVal  = parseFloat(document.getElementById('area').value);
+      const chordVal = parseFloat(document.getElementById('chord').value);
+      if (areaVal > 0 && chordVal > 0) {
+        S = areaVal * af;      // m²
+        c = chordVal * lf;     // m
+        desc = 'Direct area + chord';
+      }
+    } else if (mode === 'rect') {
+      const span = parseFloat(document.getElementById('spanRect').value);
+      const chordRect = parseFloat(document.getElementById('chordRect').value);
+      if (span > 0 && chordRect > 0) {
+        const span_m = span * lf;
+        const chord_m = chordRect * lf;
+        S = span_m * chord_m;
+        c = chord_m;
+        desc = 'Rectangular surface';
+      }
+    } else if (mode === 'taper') {
+      const spanT = parseFloat(document.getElementById('spanTaper').value);
+      const cRoot = parseFloat(document.getElementById('chordRoot').value);
+      const cTip  = parseFloat(document.getElementById('chordTip').value);
+      if (spanT > 0 && cRoot > 0 && cTip > 0) {
+        const span_m = spanT * lf;
+        const cRoot_m = cRoot * lf;
+        const cTip_m  = cTip * lf;
+        // Trapezoid area
+        S = 0.5 * (cRoot_m + cTip_m) * span_m;
+        // Mean aerodynamic chord for trapezoid
+        const numerator = cRoot_m * cRoot_m + cRoot_m * cTip_m + cTip_m * cTip_m;
+        const denom = cRoot_m + cTip_m;
+        const cMAC = (2.0 / 3.0) * (numerator / denom);
+        c = cMAC;
+        desc = 'Tapered surface (trapezoid, using MAC)';
+      }
+    }
+
+    return { S, c, desc };
+  }
+
+  function calculateServoTorque() {
+    const resultsDiv = document.getElementById('results');
+
+    // Speed and air density
+    const V = calculateAirspeed();
+    const rho = parseFloat(document.getElementById('rho').value);
+
+    if (!isFinite(V) || V <= 0 || !isFinite(rho) || rho <= 0) {
+      resultsDiv.innerHTML =
+        '<strong>Please enter valid airspeed and air density.</strong>';
+      return;
+    }
+
+    // Geometry
+    const geom = computeGeometry();
+    const S = geom.S;
+    const c = geom.c;
+
+    if (!isFinite(S) || !isFinite(c) || S <= 0 || c <= 0) {
+      resultsDiv.innerHTML =
+        '<strong>Please enter valid control surface geometry.</strong>';
+      return;
+    }
+
+    // Other inputs
+    const xcp = parseFloat(document.getElementById('cpFrac').value);
+    const servoArmVal = parseFloat(document.getElementById('servoArm').value);
+    const hornArmVal  = parseFloat(document.getElementById('hornArm').value);
+    const safety      = parseFloat(document.getElementById('safety').value);
+    const servoType   = document.getElementById('servoType').value;
+    const lf          = lengthToMetersFactor();
+
+    if (!isFinite(xcp) || xcp <= 0 || xcp > 1 ||
+        !isFinite(servoArmVal) || servoArmVal <= 0 ||
+        !isFinite(hornArmVal)  || hornArmVal  <= 0 ||
+        !isFinite(safety)      || safety      <= 0) {
+      resultsDiv.innerHTML =
+        '<strong>Please enter valid x<sub>cp</sub>, linkage lengths, and safety factor.</strong>';
+      return;
+    }
+
+    const servoArm_m = servoArmVal * lf;
+    const hornArm_m  = hornArmVal  * lf;
+
+    // Dynamic pressure
+    const q = 0.5 * rho * V * V; // N/m²
+
+    // Hinge moment: M_h = q * S * c * xcp
+    const M_h = q * S * c * xcp; // N·m
+
+    // Servo torque at output shaft (no safety yet)
+    const T_servo = M_h * (servoArm_m / hornArm_m); // N·m
+
+    // Apply safety factor
+    const T_safe = T_servo * safety;
+
+    // Servo type factor
+    let servoFactor = 1.0;
+    if (servoType === 'analog') {
+      servoFactor = 1.25; // analog servos get extra margin
+    }
+
+    const T_final = T_safe * servoFactor; // N·m
+
+    // Conversions
+    const N_m  = T_final;
+    const kgcm = N_m * 10.1971621298;
+    const ozin = N_m * 141.611932278;
+    const lbin = N_m * 8.8507457676;
+    const lbft = N_m * 0.7375621493;
+
+    const hinge_kgcm = M_h * 10.1971621298;
+    const hinge_ozin = M_h * 141.611932278;
+
+    // Area & chord in imperial (for display)
+    const S_in2 = S / 0.00064516;
+    const c_in  = c / 0.0254;
+
+    const V_kmh = V * 3.6;
+    const V_mph = V * 2.23694;
+
+    resultsDiv.innerHTML = `
+      <strong>Results (${currentSurfaceName}):</strong>
+      <span>Airspeed used: ${V.toFixed(2)} m/s (${V_kmh.toFixed(1)} km/h, ${V_mph.toFixed(1)} mph)</span>
+      <span>Dynamic pressure q: ${q.toFixed(1)} N/m²</span>
+      <span>Control surface: ${geom.desc}</span>
+      <span> &bull; Area S: ${S.toFixed(4)} m² (${S_in2.toFixed(1)} in²)</span>
+      <span> &bull; Chord c (used): ${c.toFixed(4)} m (${c_in.toFixed(2)} in)</span>
+      <span>Hinge moment M<sub>h</sub> (about hinge): ${M_h.toFixed(3)} N·m
+        (${hinge_kgcm.toFixed(2)} kg·cm, ${hinge_ozin.toFixed(1)} oz·in)</span>
+      <span>Required servo torque at output shaft (with safety & servo type):</span>
+      <span> &bull; ${N_m.toFixed(3)} N·m</span>
+      <span> &bull; ${kgcm.toFixed(2)} kg·cm</span>
+      <span> &bull; ${ozin.toFixed(1)} oz·in</span>
+      <span> &bull; ${lbin.toFixed(2)} lb·in</span>
+      <span> &bull; ${lbft.toFixed(3)} lb·ft</span>
+      <span class="note">
+        Surface tab: ${currentSurfaceName}.
+        Servo type factor: ${
+          servoType === 'analog'
+            ? 'Analog (+25% torque margin)'
+            : 'Digital (no extra factor)'
+        }. Compare these values to the servo’s rated torque and add further margin
+        for flutter, linkage slop, and shock loads as appropriate.
+      </span>
+    `;
+  }
+
+  function setActiveSurfaceTab(name) {
+    ['aileron', 'elevator', 'rudder'].forEach(s => {
+      const btn = document.getElementById('tab-' + s);
+      if (!btn) return;
+      if (s === name) btn.classList.add('active');
+      else btn.classList.remove('active');
+    });
+  }
+
+  function applySurfacePreset(name) {
+    currentSurfaceName = name;
+    setActiveSurfaceTab(name);
+
+    const lf = lengthToMetersFactor();
+    const fromMeters = 1.0 / lf;
+
+    // Defaults in meters (typical mid-size sport model-ish values)
+    if (name === 'aileron') {
+      document.getElementById('geomMode').value = 'taper';
+      toggleGeomMode();
+      document.getElementById('spanTaper').value = (0.4 * fromMeters).toFixed(3);
+      document.getElementById('chordRoot').value = (0.04 * fromMeters).toFixed(3);
+      document.getElementById('chordTip').value  = (0.03 * fromMeters).toFixed(3);
+      document.getElementById('cpFrac').value = 0.4;
+      document.getElementById('servoArm').value = (0.012 * fromMeters).toFixed(3);
+      document.getElementById('hornArm').value  = (0.018 * fromMeters).toFixed(3);
+      document.getElementById('safety').value = 3.0;
+      document.getElementById('servoType').value = 'digital';
+    } else if (name === 'elevator') {
+      document.getElementById('geomMode').value = 'rect';
+      toggleGeomMode();
+      document.getElementById('spanRect').value  = (0.3 * fromMeters).toFixed(3);
+      document.getElementById('chordRect').value = (0.07 * fromMeters).toFixed(3);
+      document.getElementById('cpFrac').value = 0.4;
+      document.getElementById('servoArm').value = (0.012 * fromMeters).toFixed(3);
+      document.getElementById('hornArm').value  = (0.020 * fromMeters).toFixed(3);
+      document.getElementById('safety').value = 3.0;
+      document.getElementById('servoType').value = 'digital';
+    } else if (name === 'rudder') {
+      document.getElementById('geomMode').value = 'rect';
+      toggleGeomMode();
+      document.getElementById('spanRect').value  = (0.25 * fromMeters).toFixed(3);
+      document.getElementById('chordRect').value = (0.06 * fromMeters).toFixed(3);
+      document.getElementById('cpFrac').value = 0.4;
+      document.getElementById('servoArm').value = (0.012 * fromMeters).toFixed(3);
+      document.getElementById('hornArm').value  = (0.022 * fromMeters).toFixed(3);
+      document.getElementById('safety').value = 3.0;
+      document.getElementById('servoType').value = 'digital';
+    }
+  }
+
+  function buildConfigFromInputs() {
+    return {
+      version: 1,
+      surfaceName: currentSurfaceName,
+      speedMode: document.getElementById('speedMode').value,
+      speedUnit: document.getElementById('speedUnit').value,
+      airspeed: parseFloat(document.getElementById('airspeed').value),
+      propPitch: parseFloat(document.getElementById('propPitch').value),
+      rpm: parseFloat(document.getElementById('rpm').value),
+      eta: parseFloat(document.getElementById('eta').value),
+      rho: parseFloat(document.getElementById('rho').value),
+      lengthUnit: document.getElementById('lengthUnit').value,
+      areaUnit: document.getElementById('areaUnit').value,
+      geomMode: document.getElementById('geomMode').value,
+      area: parseFloat(document.getElementById('area').value),
+      chord: parseFloat(document.getElementById('chord').value),
+      spanRect: parseFloat(document.getElementById('spanRect').value),
+      chordRect: parseFloat(document.getElementById('chordRect').value),
+      spanTaper: parseFloat(document.getElementById('spanTaper').value),
+      chordRoot: parseFloat(document.getElementById('chordRoot').value),
+      chordTip: parseFloat(document.getElementById('chordTip').value),
+      xcp: parseFloat(document.getElementById('cpFrac').value),
+      servoArm: parseFloat(document.getElementById('servoArm').value),
+      hornArm: parseFloat(document.getElementById('hornArm').value),
+      safety: parseFloat(document.getElementById('safety').value),
+      servoType: document.getElementById('servoType').value
+    };
+  }
+
+  function exportConfig() {
+    const cfg = buildConfigFromInputs();
+    document.getElementById('configJson').value =
+      JSON.stringify(cfg, null, 2);
+  }
+
+  function applyConfigToInputs(cfg) {
+    if (cfg.surfaceName) {
+      currentSurfaceName = cfg.surfaceName;
+      setActiveSurfaceTab(currentSurfaceName);
+    }
+
+    if (cfg.speedMode) {
+      document.getElementById('speedMode').value = cfg.speedMode;
+      toggleSpeedMode();
+    }
+    if (cfg.speedUnit) {
+      document.getElementById('speedUnit').value = cfg.speedUnit;
+    }
+    if (cfg.airspeed != null) document.getElementById('airspeed').value = cfg.airspeed;
+    if (cfg.propPitch != null) document.getElementById('propPitch').value = cfg.propPitch;
+    if (cfg.rpm != null) document.getElementById('rpm').value = cfg.rpm;
+    if (cfg.eta != null) document.getElementById('eta').value = cfg.eta;
+    if (cfg.rho != null) document.getElementById('rho').value = cfg.rho;
+
+    if (cfg.lengthUnit) document.getElementById('lengthUnit').value = cfg.lengthUnit;
+    if (cfg.areaUnit)   document.getElementById('areaUnit').value   = cfg.areaUnit;
+
+    if (cfg.geomMode) {
+      document.getElementById('geomMode').value = cfg.geomMode;
+      toggleGeomMode();
+    }
+    if (cfg.area != null)      document.getElementById('area').value      = cfg.area;
+    if (cfg.chord != null)     document.getElementById('chord').value     = cfg.chord;
+    if (cfg.spanRect != null)  document.getElementById('spanRect').value  = cfg.spanRect;
+    if (cfg.chordRect != null) document.getElementById('chordRect').value = cfg.chordRect;
+    if (cfg.spanTaper != null) document.getElementById('spanTaper').value = cfg.spanTaper;
+    if (cfg.chordRoot != null) document.getElementById('chordRoot').value = cfg.chordRoot;
+    if (cfg.chordTip != null)  document.getElementById('chordTip').value  = cfg.chordTip;
+    if (cfg.xcp != null)       document.getElementById('cpFrac').value    = cfg.xcp;
+    if (cfg.servoArm != null)  document.getElementById('servoArm').value  = cfg.servoArm;
+    if (cfg.hornArm != null)   document.getElementById('hornArm').value   = cfg.hornArm;
+    if (cfg.safety != null)    document.getElementById('safety').value    = cfg.safety;
+    if (cfg.servoType)         document.getElementById('servoType').value = cfg.servoType;
+  }
+
+  function importConfig() {
+    const text = document.getElementById('configJson').value;
+    if (!text.trim()) {
+      alert('Paste config JSON into the box first.');
+      return;
+    }
+    let cfg;
+    try {
+      cfg = JSON.parse(text);
+    } catch (e) {
+      alert('Invalid JSON: ' + e.message);
+      return;
+    }
+    applyConfigToInputs(cfg);
+  }
+
+  // Initialize on load
+  window.addEventListener('DOMContentLoaded', function() {
+    toggleSpeedMode();
+    toggleGeomMode();
+    applySurfacePreset('aileron');
+  });
+</script>
+
+</body>
+</html>
