@@ -127,11 +127,56 @@
 </div>
 
 <!-- 2. Air properties -->
-<h2>2. Air Properties</h2>
+<h2>2. Air Properties (Density)</h2>
 
 <div class="row">
-  <label for="rho">Air density ρ (kg/m³):</label>
-  <input id="rho" type="number" value="1.225" step="0.001" />
+  <label for="rhoMode">Air density mode:</label>
+  <select id="rhoMode" onchange="toggleRhoMode()">
+    <option value="direct">Enter density directly</option>
+    <option value="calc">Calculate from altitude &amp; temperature</option>
+  </select>
+</div>
+
+<div id="rhoDirectBlock">
+  <div class="row">
+    <label for="rho">Air density ρ (kg/m³):</label>
+    <input id="rho" type="number" value="1.225" step="0.001" />
+  </div>
+</div>
+
+<div id="rhoCalcBlock" style="display:none;">
+  <div class="row">
+    <label for="altitude">Altitude:</label>
+    <input id="altitude" type="number" value="0" step="1" />
+    <select id="altUnit">
+      <option value="m">meters</option>
+      <option value="ft">feet</option>
+    </select>
+  </div>
+  <div class="row">
+    <label for="tempC">Outside air temperature at altitude (°C):</label>
+    <input id="tempC" type="number" value="15" step="0.5" />
+  </div>
+
+  <!-- NEW: City/town -> altitude helper -->
+  <div class="row">
+    <label for="locationName">City/town (built-in list) to fill altitude:</label>
+    <input id="locationName" type="text" placeholder="e.g. Edmonton, Calgary" />
+    <button type="button" onclick="lookupAltitudeFromLocation()">Lookup altitude</button>
+  </div>
+  <p class="note" id="locationNote">
+    Uses a small built-in table of locations &amp; elevations (you can edit/extend in the JS).
+    For arbitrary places, you’d need to hook in an online elevation API.
+  </p>
+
+  <p class="note">
+    Uses a standard atmosphere model (ISA troposphere, up to ~11&nbsp;km) for pressure vs altitude
+    and your entered temperature for density:
+    <br>
+    – Pressure from ISA<br>
+    – Density ρ = P / (R · T<sub>actual</sub>)<br>
+    For typical RC field altitudes (&lt; 3000&nbsp;m / 10&nbsp;000&nbsp;ft), this is a good approximation.
+  </p>
 </div>
 
 <!-- 3. Control surface geometry -->
@@ -277,6 +322,52 @@
 <script>
   let currentSurfaceName = 'aileron';
 
+  // Simple built-in table of city/town approximate elevations (meters).
+  // Extend or edit as needed.
+  const locationAltitudeTable = {
+    // Canada examples
+    'edmonton': 645,
+    'calgary': 1045,
+    'red deer': 855,
+    'winnipeg': 240,
+    'saskatoon': 480,
+    'regina': 580,
+    'vancouver': 70,
+    'victoria': 20,
+    'toronto': 75,
+    'ottawa': 70,
+    'montreal': 40,
+    // US examples
+    'denver': 1609,
+    'phoenix': 340,
+    'los angeles': 90,
+    'seattle': 50
+  };
+
+  function lookupAltitudeFromLocation() {
+    const nameInput = document.getElementById('locationName').value || '';
+    const note = document.getElementById('locationNote');
+    const key = nameInput.trim().toLowerCase();
+
+    if (!key) {
+      note.textContent = 'Please type a city/town name first.';
+      return;
+    }
+
+    if (locationAltitudeTable.hasOwnProperty(key)) {
+      const altitudeMeters = locationAltitudeTable[key];
+      document.getElementById('altitude').value = altitudeMeters.toFixed(0);
+      document.getElementById('altUnit').value = 'm';
+      note.textContent =
+        'Altitude filled from built-in table: ' + nameInput +
+        ' ≈ ' + altitudeMeters.toFixed(0) + ' m.';
+    } else {
+      note.textContent =
+        'No built-in altitude for "' + nameInput +
+        '". Edit the JS table or use manual altitude.';
+    }
+  }
+
   function toggleSpeedMode() {
     const mode = document.getElementById('speedMode').value;
     document.getElementById('directSpeedBlock').style.display =
@@ -293,6 +384,14 @@
       mode === 'rect' ? 'block' : 'none';
     document.getElementById('geomTaperBlock').style.display =
       mode === 'taper' ? 'block' : 'none';
+  }
+
+  function toggleRhoMode() {
+    const mode = document.getElementById('rhoMode').value;
+    document.getElementById('rhoDirectBlock').style.display =
+      mode === 'direct' ? 'block' : 'none';
+    document.getElementById('rhoCalcBlock').style.display =
+      mode === 'calc' ? 'block' : 'none';
   }
 
   function lengthToMetersFactor() {
@@ -335,6 +434,53 @@
       }
       // Pitch speed in m/s
       return pitch * rpm * 0.0004233 * eta;
+    }
+  }
+
+  function computeAirDensity() {
+    const mode = document.getElementById('rhoMode').value;
+
+    if (mode === 'direct') {
+      const rho = parseFloat(document.getElementById('rho').value);
+      return { rho: rho, desc: 'Direct density entry' };
+    } else {
+      const altVal = parseFloat(document.getElementById('altitude').value);
+      const altUnit = document.getElementById('altUnit').value;
+      const tempC = parseFloat(document.getElementById('tempC').value);
+
+      if (!isFinite(altVal) || !isFinite(tempC)) {
+        return { rho: NaN, desc: 'Invalid altitude or temperature' };
+      }
+
+      let h = altVal;
+      if (altUnit === 'ft') {
+        h = h * 0.3048; // feet to meters
+      }
+
+      if (h < 0) h = 0;
+      if (h > 11000) h = 11000; // clamp to ISA troposphere limit
+
+      // ISA constants
+      const T0 = 288.15;       // K
+      const P0 = 101325.0;     // Pa
+      const L  = 0.0065;       // K/m
+      const R  = 287.058;      // J/(kg·K)
+      const g0 = 9.80665;      // m/s²
+
+      const T_ISA = T0 - L * h;
+      const P = P0 * Math.pow(T_ISA / T0, g0 / (R * L));
+      const T_actual = tempC + 273.15;
+
+      let rho;
+      if (T_actual > 0) {
+        rho = P / (R * T_actual);
+      } else {
+        // Fall back to ISA density if temperature is non-physical
+        rho = P / (R * T_ISA);
+      }
+
+      const desc = `Calculated from altitude ${altVal} ${altUnit}, temp ${tempC.toFixed(1)} °C (ISA pressure)`;
+      return { rho: rho, desc: desc };
     }
   }
 
@@ -389,13 +535,20 @@
   function calculateServoTorque() {
     const resultsDiv = document.getElementById('results');
 
-    // Speed and air density
+    // Speed
     const V = calculateAirspeed();
-    const rho = parseFloat(document.getElementById('rho').value);
-
-    if (!isFinite(V) || V <= 0 || !isFinite(rho) || rho <= 0) {
+    if (!isFinite(V) || V <= 0) {
       resultsDiv.innerHTML =
-        '<strong>Please enter valid airspeed and air density.</strong>';
+        '<strong>Please enter valid airspeed or prop data.</strong>';
+      return;
+    }
+
+    // Air density
+    const air = computeAirDensity();
+    const rho = air.rho;
+    if (!isFinite(rho) || rho <= 0) {
+      resultsDiv.innerHTML =
+        '<strong>Please enter valid air density or valid altitude/temperature.</strong>';
       return;
     }
 
@@ -403,7 +556,6 @@
     const geom = computeGeometry();
     const S = geom.S;
     const c = geom.c;
-
     if (!isFinite(S) || !isFinite(c) || S <= 0 || c <= 0) {
       resultsDiv.innerHTML =
         '<strong>Please enter valid control surface geometry.</strong>';
@@ -470,6 +622,7 @@
     resultsDiv.innerHTML = `
       <strong>Results (${currentSurfaceName}):</strong>
       <span>Airspeed used: ${V.toFixed(2)} m/s (${V_kmh.toFixed(1)} km/h, ${V_mph.toFixed(1)} mph)</span>
+      <span>Air density used: ${rho.toFixed(3)} kg/m³ (${air.desc})</span>
       <span>Dynamic pressure q: ${q.toFixed(1)} N/m²</span>
       <span>Control surface: ${geom.desc}</span>
       <span> &bull; Area S: ${S.toFixed(4)} m² (${S_in2.toFixed(1)} in²)</span>
@@ -483,12 +636,13 @@
       <span> &bull; ${lbin.toFixed(2)} lb·in</span>
       <span> &bull; ${lbft.toFixed(3)} lb·ft</span>
       <span class="note">
-        Surface tab: ${currentSurfaceName}.
+        Surface tab: ${currentSurfaceName}.<br>
         Servo type factor: ${
           servoType === 'analog'
             ? 'Analog (+25% torque margin)'
             : 'Digital (no extra factor)'
-        }. Compare these values to the servo’s rated torque and add further margin
+        }.<br>
+        Compare these values to the servo’s rated torque and add further margin
         for flutter, linkage slop, and shock loads as appropriate.
       </span>
     `;
@@ -547,7 +701,7 @@
 
   function buildConfigFromInputs() {
     return {
-      version: 1,
+      version: 3,
       surfaceName: currentSurfaceName,
       speedMode: document.getElementById('speedMode').value,
       speedUnit: document.getElementById('speedUnit').value,
@@ -555,22 +709,29 @@
       propPitch: parseFloat(document.getElementById('propPitch').value),
       rpm: parseFloat(document.getElementById('rpm').value),
       eta: parseFloat(document.getElementById('eta').value),
+
+      rhoMode: document.getElementById('rhoMode').value,
       rho: parseFloat(document.getElementById('rho').value),
+      altitude: parseFloat(document.getElementById('altitude').value),
+      altUnit: document.getElementById('altUnit').value,
+      tempC: parseFloat(document.getElementById('tempC').value),
+
       lengthUnit: document.getElementById('lengthUnit').value,
-      areaUnit: document.getElementById('areaUnit').value,
-      geomMode: document.getElementById('geomMode').value,
-      area: parseFloat(document.getElementById('area').value),
-      chord: parseFloat(document.getElementById('chord').value),
-      spanRect: parseFloat(document.getElementById('spanRect').value),
-      chordRect: parseFloat(document.getElementById('chordRect').value),
-      spanTaper: parseFloat(document.getElementById('spanTaper').value),
-      chordRoot: parseFloat(document.getElementById('chordRoot').value),
-      chordTip: parseFloat(document.getElementById('chordTip').value),
-      xcp: parseFloat(document.getElementById('cpFrac').value),
+      areaUnit:   document.getElementById('areaUnit').value,
+      geomMode:   document.getElementById('geomMode').value,
+      area:       parseFloat(document.getElementById('area').value),
+      chord:      parseFloat(document.getElementById('chord').value),
+      spanRect:   parseFloat(document.getElementById('spanRect').value),
+      chordRect:  parseFloat(document.getElementById('chordRect').value),
+      spanTaper:  parseFloat(document.getElementById('spanTaper').value),
+      chordRoot:  parseFloat(document.getElementById('chordRoot').value),
+      chordTip:   parseFloat(document.getElementById('chordTip').value),
+
+      xcp:      parseFloat(document.getElementById('cpFrac').value),
       servoArm: parseFloat(document.getElementById('servoArm').value),
-      hornArm: parseFloat(document.getElementById('hornArm').value),
-      safety: parseFloat(document.getElementById('safety').value),
-      servoType: document.getElementById('servoType').value
+      hornArm:  parseFloat(document.getElementById('hornArm').value),
+      safety:   parseFloat(document.getElementById('safety').value),
+      servoType:document.getElementById('servoType').value
     };
   }
 
@@ -593,11 +754,19 @@
     if (cfg.speedUnit) {
       document.getElementById('speedUnit').value = cfg.speedUnit;
     }
-    if (cfg.airspeed != null) document.getElementById('airspeed').value = cfg.airspeed;
+    if (cfg.airspeed != null)  document.getElementById('airspeed').value  = cfg.airspeed;
     if (cfg.propPitch != null) document.getElementById('propPitch').value = cfg.propPitch;
-    if (cfg.rpm != null) document.getElementById('rpm').value = cfg.rpm;
-    if (cfg.eta != null) document.getElementById('eta').value = cfg.eta;
-    if (cfg.rho != null) document.getElementById('rho').value = cfg.rho;
+    if (cfg.rpm != null)       document.getElementById('rpm').value       = cfg.rpm;
+    if (cfg.eta != null)       document.getElementById('eta').value       = cfg.eta;
+
+    if (cfg.rhoMode) {
+      document.getElementById('rhoMode').value = cfg.rhoMode;
+      toggleRhoMode();
+    }
+    if (cfg.rho != null)      document.getElementById('rho').value      = cfg.rho;
+    if (cfg.altitude != null) document.getElementById('altitude').value = cfg.altitude;
+    if (cfg.altUnit)          document.getElementById('altUnit').value  = cfg.altUnit;
+    if (cfg.tempC != null)    document.getElementById('tempC').value    = cfg.tempC;
 
     if (cfg.lengthUnit) document.getElementById('lengthUnit').value = cfg.lengthUnit;
     if (cfg.areaUnit)   document.getElementById('areaUnit').value   = cfg.areaUnit;
@@ -613,11 +782,12 @@
     if (cfg.spanTaper != null) document.getElementById('spanTaper').value = cfg.spanTaper;
     if (cfg.chordRoot != null) document.getElementById('chordRoot').value = cfg.chordRoot;
     if (cfg.chordTip != null)  document.getElementById('chordTip').value  = cfg.chordTip;
-    if (cfg.xcp != null)       document.getElementById('cpFrac').value    = cfg.xcp;
-    if (cfg.servoArm != null)  document.getElementById('servoArm').value  = cfg.servoArm;
-    if (cfg.hornArm != null)   document.getElementById('hornArm').value   = cfg.hornArm;
-    if (cfg.safety != null)    document.getElementById('safety').value    = cfg.safety;
-    if (cfg.servoType)         document.getElementById('servoType').value = cfg.servoType;
+
+    if (cfg.xcp != null)      document.getElementById('cpFrac').value = cfg.xcp;
+    if (cfg.servoArm != null) document.getElementById('servoArm').value = cfg.servoArm;
+    if (cfg.hornArm != null)  document.getElementById('hornArm').value = cfg.hornArm;
+    if (cfg.safety != null)   document.getElementById('safety').value = cfg.safety;
+    if (cfg.servoType)        document.getElementById('servoType').value = cfg.servoType;
   }
 
   function importConfig() {
@@ -640,6 +810,7 @@
   window.addEventListener('DOMContentLoaded', function() {
     toggleSpeedMode();
     toggleGeomMode();
+    toggleRhoMode();
     applySurfacePreset('aileron');
   });
 </script>
